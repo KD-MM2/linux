@@ -520,7 +520,11 @@ void __init change_floppy(char *fmt, ...)
 	va_start(args, fmt);
 	vsprintf(buf, fmt, args);
 	va_end(args);
-	fd = ksys_open("/dev/root", O_RDWR | O_NDELAY, 0);
+	if (saved_root_name[0])
+		fd = ksys_open(saved_root_name, O_RDWR | O_NDELAY, 0);
+	else
+		fd = ksys_open("/dev/root", O_RDWR | O_NDELAY, 0);
+
 	if (fd >= 0) {
 		ksys_ioctl(fd, FDEJECT, 0);
 		ksys_close(fd);
@@ -564,11 +568,17 @@ void __init mount_root(void)
 #endif
 #ifdef CONFIG_BLOCK
 	{
-		int err = create_dev("/dev/root", ROOT_DEV);
-
-		if (err < 0)
-			pr_emerg("Failed to create /dev/root: %d\n", err);
-		mount_block_root("/dev/root", root_mountflags);
+		if (saved_root_name[0] == '/') {
+			int err = create_dev(saved_root_name, ROOT_DEV);
+			if (err < 0)
+				pr_emerg("Failed to create %s: %d\n", saved_root_name, err);
+			mount_block_root(saved_root_name, root_mountflags);
+		} else {
+			int err = create_dev("/dev/root", ROOT_DEV);
+			if (err < 0)
+				pr_emerg("Failed to create /dev/root: %d\n", err);
+			mount_block_root("/dev/root", root_mountflags);
+		}
 	}
 #endif
 }

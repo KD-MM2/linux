@@ -2022,16 +2022,14 @@ static vm_fault_t shmem_fault(struct vm_fault *vmf)
 		    shmem_falloc->waitq &&
 		    vmf->pgoff >= shmem_falloc->start &&
 		    vmf->pgoff < shmem_falloc->next) {
+			struct file *fpin;
 			wait_queue_head_t *shmem_falloc_waitq;
 			DEFINE_WAIT_FUNC(shmem_fault_wait, synchronous_wake_function);
 
 			ret = VM_FAULT_NOPAGE;
-			if ((vmf->flags & FAULT_FLAG_ALLOW_RETRY) &&
-			   !(vmf->flags & FAULT_FLAG_RETRY_NOWAIT)) {
-				/* It's polite to up mmap_sem if we can */
-				up_read(&vma->vm_mm->mmap_sem);
+			fpin = maybe_unlock_mmap_for_io(vmf, NULL);
+			if (fpin)
 				ret = VM_FAULT_RETRY;
-			}
 
 			shmem_falloc_waitq = shmem_falloc->waitq;
 			prepare_to_wait(shmem_falloc_waitq, &shmem_fault_wait,
@@ -2049,6 +2047,9 @@ static vm_fault_t shmem_fault(struct vm_fault *vmf)
 			spin_lock(&inode->i_lock);
 			finish_wait(shmem_falloc_waitq, &shmem_fault_wait);
 			spin_unlock(&inode->i_lock);
+
+			if (fpin)
+				fput(fpin);
 			return ret;
 		}
 		spin_unlock(&inode->i_lock);
@@ -3237,6 +3238,14 @@ static int shmem_xattr_handler_set(const struct xattr_handler *handler,
 	struct shmem_inode_info *info = SHMEM_I(inode);
 
 	name = xattr_full_name(handler, name);
+
+	if (!strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN)) {
+		if (strcmp(name, XATTR_NAME_PAX_FLAGS))
+			return -EOPNOTSUPP;
+		if (size > 8)
+			return -EINVAL;
+	}
+
 	return simple_xattr_set(&info->xattrs, name, value, size, flags);
 }
 
@@ -3252,6 +3261,12 @@ static const struct xattr_handler shmem_trusted_xattr_handler = {
 	.set = shmem_xattr_handler_set,
 };
 
+static const struct xattr_handler shmem_user_xattr_handler = {
+	.prefix = XATTR_USER_PREFIX,
+	.get = shmem_xattr_handler_get,
+	.set = shmem_xattr_handler_set,
+};
+
 static const struct xattr_handler *shmem_xattr_handlers[] = {
 #ifdef CONFIG_TMPFS_POSIX_ACL
 	&posix_acl_access_xattr_handler,
@@ -3259,6 +3274,7 @@ static const struct xattr_handler *shmem_xattr_handlers[] = {
 #endif
 	&shmem_security_xattr_handler,
 	&shmem_trusted_xattr_handler,
+	&shmem_user_xattr_handler,
 	NULL
 };
 

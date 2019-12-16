@@ -1013,7 +1013,7 @@ int xhci_suspend(struct xhci_hcd *xhci, bool do_wakeup)
 	writel(command, &xhci->op_regs->command);
 
 	/* Some chips from Fresco Logic need an extraordinary delay */
-	delay *= (xhci->quirks & XHCI_SLOW_SUSPEND) ? 10 : 1;
+	delay *= (xhci->quirks & XHCI_SLOW_SUSPEND) ? 10 : 3;
 
 	if (xhci_handshake(&xhci->op_regs->status,
 		      STS_HALT, STS_HALT, delay)) {

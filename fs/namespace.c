@@ -2468,6 +2468,7 @@ static void set_mount_attributes(struct mount *mnt, unsigned int mnt_flags)
 
 static void mnt_warn_timestamp_expiry(struct path *mountpoint, struct vfsmount *mnt)
 {
+/*
 	struct super_block *sb = mnt->mnt_sb;
 
 	if (!__mnt_is_readonly(mnt) &&
@@ -2486,6 +2487,7 @@ static void mnt_warn_timestamp_expiry(struct path *mountpoint, struct vfsmount *
 
 		free_page((unsigned long)buf);
 	}
+*/
 }
 
 /*

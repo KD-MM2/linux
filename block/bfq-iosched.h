@@ -1079,6 +1079,8 @@ static const char *checked_dev_name(const struct device *dev)
 
 #define bfq_log_bfqq(bfqd, bfqq, fmt, args...)  do {		\
 	char pid_str[MAX_PID_STR_LENGTH];			\
+	if (likely(!blk_trace_note_message_enabled((bfqd)->queue)))	\
+	break;							\
 	bfq_pid_to_str((bfqq)->pid, pid_str, MAX_PID_STR_LENGTH); \
 	pr_crit("%s bfq%s%c %s [%s] " fmt "\n",			\
 		checked_dev_name((bfqd)->queue->backing_dev_info->dev), \
@@ -1097,6 +1099,8 @@ static const char *checked_dev_name(const struct device *dev)
 
 #define bfq_log_bfqq(bfqd, bfqq, fmt, args...) do {			\
 	char pid_str[MAX_PID_STR_LENGTH];			\
+	if (likely(!blk_trace_note_message_enabled((bfqd)->queue)))	\
+	break;							\
 	bfq_pid_to_str((bfqq)->pid, pid_str, MAX_PID_STR_LENGTH); \
 	pr_crit("%s bfq%s%c %s [%s] " fmt "\n",			\
 		checked_dev_name((bfqd)->queue->backing_dev_info->dev), \

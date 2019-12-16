@@ -1476,6 +1476,24 @@ static void __blk_mq_delay_run_hw_queue(struct blk_mq_hw_ctx *hctx, bool async,
 		put_cpu();
 	}
 
+	/*
+	 * Queue a work to run queue.
+	 *
+	 * If this is a non-delayed run and a non-delayed work is already
+	 * scheduled, avoid scheduling the same work again.
+	 *
+	 * If this is a delayed run, unconditinally clear the
+	 * BLK_MQ_S_WORK_QUEUED bit so the next possible non-delayed run can
+	 * be queued before this delayed run gets to start.
+	 */
+
+	if (!msecs) {
+		if (test_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state))
+			return;
+		set_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
+	} else
+		clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
+
 	kblockd_mod_delayed_work_on(blk_mq_hctx_next_cpu(hctx), &hctx->run_work,
 				    msecs_to_jiffies(msecs));
 }
@@ -1561,6 +1579,7 @@ void blk_mq_stop_hw_queue(struct blk_mq_hw_ctx *hctx)
 	cancel_delayed_work(&hctx->run_work);
 
 	set_bit(BLK_MQ_S_STOPPED, &hctx->state);
+	clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
 }
 EXPORT_SYMBOL(blk_mq_stop_hw_queue);
 
@@ -1626,6 +1645,7 @@ static void blk_mq_run_work_fn(struct work_struct *work)
 	struct blk_mq_hw_ctx *hctx;
 
 	hctx = container_of(work, struct blk_mq_hw_ctx, run_work.work);
+	clear_bit(BLK_MQ_S_WORK_QUEUED, &hctx->state);
 
 	/*
 	 * If we are stopped, don't run the queue.
@@ -1707,28 +1727,20 @@ static int plug_rq_cmp(void *priv, struct list_head *a, struct list_head *b)
 	struct request *rqa = container_of(a, struct request, queuelist);
 	struct request *rqb = container_of(b, struct request, queuelist);
 
-	if (rqa->mq_ctx < rqb->mq_ctx)
-		return -1;
-	else if (rqa->mq_ctx > rqb->mq_ctx)
-		return 1;
-	else if (rqa->mq_hctx < rqb->mq_hctx)
-		return -1;
-	else if (rqa->mq_hctx > rqb->mq_hctx)
-		return 1;
+	if (rqa->mq_ctx != rqb->mq_ctx)
+		return rqa->mq_ctx > rqb->mq_ctx;
+	if (rqa->mq_hctx != rqb->mq_hctx)
+		return rqa->mq_hctx > rqb->mq_hctx;
 
 	return blk_rq_pos(rqa) > blk_rq_pos(rqb);
 }
 
 void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
-	struct blk_mq_hw_ctx *this_hctx;
-	struct blk_mq_ctx *this_ctx;
-	struct request_queue *this_q;
-	struct request *rq;
 	LIST_HEAD(list);
-	LIST_HEAD(rq_list);
-	unsigned int depth;
 
+	if (list_empty(&plug->mq_list))
+		return;
 	list_splice_init(&plug->mq_list, &list);
 
 	if (plug->rq_count > 2 && plug->multiple_queues)
@@ -1736,42 +1748,27 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 
 	plug->rq_count = 0;
 
-	this_q = NULL;
-	this_hctx = NULL;
-	this_ctx = NULL;
-	depth = 0;
+	do {
+		struct list_head rq_list;
+		struct request *rq, *head_rq = list_entry_rq(list.next);
+		struct list_head *pos = &head_rq->queuelist; /* skip first */
+		struct blk_mq_hw_ctx *this_hctx = head_rq->mq_hctx;
+		struct blk_mq_ctx *this_ctx = head_rq->mq_ctx;
+		unsigned int depth = 1;
 
-	while (!list_empty(&list)) {
-		rq = list_entry_rq(list.next);
-		list_del_init(&rq->queuelist);
-		BUG_ON(!rq->q);
-		if (rq->mq_hctx != this_hctx || rq->mq_ctx != this_ctx) {
-			if (this_hctx) {
-				trace_block_unplug(this_q, depth, !from_schedule);
-				blk_mq_sched_insert_requests(this_hctx, this_ctx,
-								&rq_list,
-								from_schedule);
-			}
-
-			this_q = rq->q;
-			this_ctx = rq->mq_ctx;
-			this_hctx = rq->mq_hctx;
-			depth = 0;
+		list_for_each_continue(pos, &list) {
+			rq = list_entry_rq(pos);
+			BUG_ON(!rq->q);
+			if (rq->mq_hctx != this_hctx || rq->mq_ctx != this_ctx)
+				break;
+			depth++;
 		}
 
-		depth++;
-		list_add_tail(&rq->queuelist, &rq_list);
-	}
-
-	/*
-	 * If 'this_hctx' is set, we know we have entries to complete
-	 * on 'rq_list'. Do those.
-	 */
-	if (this_hctx) {
-		trace_block_unplug(this_q, depth, !from_schedule);
+		list_cut_before(&rq_list, &list, pos);
+		trace_block_unplug(head_rq->q, depth, !from_schedule);
 		blk_mq_sched_insert_requests(this_hctx, this_ctx, &rq_list,
 						from_schedule);
-	}
+	} while(!list_empty(&list));
 }
 
 static void blk_mq_bio_to_request(struct request *rq, struct bio *bio,
